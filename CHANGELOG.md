@@ -7,7 +7,104 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [1.0.0-beta.2] - 2026-05-26
+
+> **Status:** Pre-release (beta). Não recomendado para uso em produção.
+
+Segunda iteração com sistema de atualização online, visualizador de logs e
+refinos diversos. Consolida todo o trabalho desde a 1.0.0-LTS.
+
+### Adicionado
+
+#### Sistema de atualização online
+- Verificação automática de updates no startup contra
+  [Cafecanudo/releases](https://github.com/Cafecanudo/releases)
+- `UpdateChecker` consulta `releases/latest` (apenas versões estáveis no aviso automático)
+- `UpdateDialog` exibe notificação de nova versão com release notes formatadas (markdown)
+- Botões: **Atualizar agora**, **Lembrar depois**, **Pular esta versão**
+- `UpdateProgressDialog` mostra progresso de download bloqueante com cancelamento
+- `UpdateOrchestrator` coordena todo o fluxo: check → dialog → download → executa setup → fecha app
+- Após instalação, pergunta se reabre o app automaticamente
+- "Pular esta versão" persiste no settings; ressurge quando há versão ainda mais nova
+- `SemverVersion` parser e comparador: respeita hierarquia `alpha < beta < rc < estável`
+
+#### Listagem de versões
+- Nova entrada **"Sobre / Versões"** no menu de configurações
+- `AvailableVersionsDialog` lista todas as releases (estáveis + pre-releases)
+- Tabela com Versão, Data, Tipo (Estável / 🧪 Beta), Ação
+- Indicador `●` na versão atualmente instalada
+- Botão "Baixar" em cada versão permite rollback ou teste de pre-release
+- Link "Ver no GitHub" para a página de releases
+
+#### Visualizador de logs in-app
+- Novo diálogo `LogViewerDialog` acessível pelo footer (botão de monitor)
+- ComboBox lista todos os arquivos de log da pasta `%APPDATA%/OmniCam/OmniCam/logs/`
+- Modo "Tempo real" (default): mostra log do dia atual com refresh automático (1s)
+- Scroll inteligente: rola automaticamente quando há novo conteúdo,
+  preserva posição quando o usuário rola para ler trechos anteriores
+- Botão "Abrir pasta" abre o Windows Explorer no diretório de logs
+- Botão "Atualizar lista" re-escaneia a pasta
+- Inclui também o `gstreamer.log` (debug nativo do GStreamer)
+- Janela maximizável com barra de título nativa, visível na taskbar
+- Fonte monoespaçada (Consolas 9pt) para leitura confortável
+
+#### Sistema de publicação automatizada
+- `deploy.py` refatorado com suporte a canais: `--channel final|beta|alpha`
+- Consulta GitHub Releases para auto-incrementar suffix (`beta.1`, `beta.2`, ...)
+- Atualiza `OMNICAM_VERSION_SUFFIX` no CMakeLists automaticamente
+- Build híbrido: verifica que `omnicam.exe` está atualizado antes de empacotar
+  (compara timestamps com fontes e CMakeLists)
+- Empacota tudo no repo público (`omnicam-dist/build/`)
+- Sincroniza `CHANGELOG.md` e `README.md` com o repo público
+- Gera setup.exe via Inno Setup com versão correta no nome
+- Cria release via GitHub API e faz upload do asset automaticamente
+- `extract_changelog_section` com fallback inteligente (full version → base → "Em desenvolvimento")
+- Confirmação interativa antes de publicar
+- Flag `--no-publish` para gerar setup local sem publicar
+- Flag `--no-gst-full-bin` para modo seletivo de DLLs
+
+#### Configuração e infraestrutura
+- Arquivo `.deploy_config` (gitignored) com token e URL do repo de releases
+- Variável `OMNICAM_RELEASES_REPO` no CMakeLists exposta via `config::releases_repo`
+- Repo público `Cafecanudo/releases` armazena CHANGELOG e releases
+- `omnicam.iss` aceita `MyAppVersion` e `MySourceDir` via parâmetros externos (`/D`)
+
+### Alterado
+
+- Janela voltou a usar a **barra de título nativa do Windows**
+  (removido `FramelessWindowHint`)
+- Removidos botões customizados Min/Max/Close — agora usa os nativos do sistema
+- Removido drag-to-move manual e `QSizeGrip` — resize por qualquer borda nativo
+- CMakeLists passou a usar `OMNICAM_VERSION_BASE` + `OMNICAM_VERSION_SUFFIX`
+  separados em vez de versão única no `project()`
+- `config.hpp.in` usa `@OMNICAM_FULL_VERSION@` (suporta sufixos como `beta.3`)
+- Banner de inicialização mostra versão completa (`1.0.0-beta.2`) no log
+- Logs do GStreamer redirecionados para arquivo separado (`gstreamer.log`)
+- Registry do GStreamer regenerado a cada inicialização (evita cache stale)
+
+### Corrigido
+
+#### Captura de microfone (continuação da 1.0.0-LTS)
+- **Recuperação automática em `AUDCLNT_E_DEVICE_INVALIDATED`** (`hr: 0x88890004`):
+  detecta o erro no bus do GStreamer e reinicializa a captura automaticamente
+- **Fallback em device ID stale**: quando o ID gravado não existe mais,
+  re-detecta micros disponíveis e cai pro default
+- **"Can't record audio fast enough"**: buffer aumentado de 200ms para 500ms,
+  com `low-latency=false`. Resolve drops em PCs com CPU alta
+
+### Build e dependências
+
+- Adicionado módulo `Qt6::Network` (HTTP, JSON, download de releases)
+- Novos arquivos: `SemverVersion`, `UpdateChecker`, `UpdateDownloader`,
+  `UpdateOrchestrator`, `UpdateDialog`, `UpdateProgressDialog`,
+  `AvailableVersionsDialog`, `LogViewerDialog`
+- `omnicam.iss` parametrizado via `/DMyAppVersion=` e `/DMySourceDir=`
+
+---
+
 ## [1.0.0-LTS] - 2026-05-22
+
+> **Status:** Release final estável (Long Term Support).
 
 Primeira versão estável (LTS) do OmniCam. Aplicação completa de roteamento de
 vídeo multi-monitor com captura de áudio, gravação, simulador e empacotamento
@@ -31,8 +128,6 @@ para distribuição via instalador Windows.
 - Plano B de áudio: apenas 1 slot CAM+LIVE transmite áudio por vez
 - Seleção persistente de microfone entre sessões
 - Detecção automática de saída de áudio (default ou específica)
-- Recuperação automática em caso de `AUDCLNT_E_DEVICE_INVALIDATED`
-- Buffer de áudio ajustado (500ms) para evitar drops em PCs lentos
 
 #### PTT (Push-to-Talk)
 - Acionamento por tecla `F12` ou botão na interface
@@ -92,7 +187,6 @@ para distribuição via instalador Windows.
   `QStandardPaths::AppDataLocation` (resolve permissões em Program Files)
 - Atalho do PTT exposto no texto do botão: "Pressione para falar (F12)"
 - `OutputWindow` do simulador usa `Qt::Window` (visível na taskbar) em vez de `Qt::Tool`
-- Versão bumped de `0.0.1-SNAPSHOT` para `1.0.0-LTS`
 - `add_executable(omnicam WIN32 ...)` no CMake: remove console ao executar fora do IDE
 - Logs verbose removidos: `detectWebcams`, `detectMicrophones`, `detectAudioOutputs`
 - Logs adicionados em eventos relevantes: PTT, mic start/stop, monitor live/off-air
@@ -130,4 +224,5 @@ para distribuição via instalador Windows.
 
 ---
 
-[1.0.0-LTS]: https://github.com/SEU-USUARIO/omnicam/releases/tag/v1.0.0-LTS
+[1.0.0-beta.2]: https://github.com/Cafecanudo/releases/releases/tag/v1.0.0-beta.2
+[1.0.0-LTS]: https://github.com/Cafecanudo/releases/releases/tag/v1.0.0-LTS
