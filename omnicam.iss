@@ -46,6 +46,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na &area de trabalho"; GroupDescription: "Atalhos adicionais:"; Flags: unchecked
+Name: "runafter"; Description: "Executar OmniCam após instalar"; Flags: unchecked; GroupDescription: "Após instalação:";
 
 [Files]
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Excludes: "logs\*,logs,omnicam.config"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -56,7 +57,7 @@ Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\omnicam.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Executar {#MyAppName} agora"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Executar OmniCam"; Flags: nowait postinstall skipifsilent; Tasks: runafter;
 
 [UninstallDelete]
 ; Apaga logs e configs gerados no diretorio do app (instalacao portable)
