@@ -1,265 +1,368 @@
-# OmniCam — Multi Presença
+# SoundBridge 🔊 → 🎧
 
-> Roteamento de webcam para múltiplas saídas de vídeo (HDMI/USB) com simulação de lag, glitch, gravação em loop e sistema de microfone com push-to-talk.
+**Transferência de arquivos entre dois PCs usando apenas um cabo de áudio.**
 
-**Versão:** 1.0.0 LTS
-
-![OmniCam](src/resources/omnicam_256.png)
-
----
-
-## Visão geral
-
-OmniCam é um app desktop para Windows que distribui o vídeo de uma única webcam para várias saídas físicas (monitores HDMI/USB) ou simuladores em janela. Cada saída pode exibir a câmera ao vivo ou uma gravação prévia, com efeitos opcionais de lag/glitch para simular instabilidade. Inclui sistema completo de microfone com roteamento por saída e push-to-talk (PTT).
-
-Útil para apresentações multi-tela, demonstrações ao vivo onde se quer simular falhas de conexão, ou cenários em que a mesma webcam precisa aparecer em mais de uma destinação física simultaneamente.
+Sem rede, sem Wi-Fi, sem pendrive, sem Bluetooth. Os bytes viram som no PC transmissor,
+atravessam um cabo P2 estéreo, e voltam a ser o arquivo original no PC receptor.
 
 ---
 
-## Tecnologias
+## Como funciona
 
-- **C++17** + **Qt 6.11** (UI, eventos, settings)
-- **GStreamer 1.0** (captura, pipeline de vídeo/áudio, sinks WASAPI)
-- **CMake** (build)
-- **Windows API** (WASAPI direto via `IMMDeviceEnumerator` pra resolver default devices)
-- **MSVC 2022**
-
----
-
-## Arquitetura
+O SoundBridge usa **áudio analógico** como meio de transmissão. O transmissor (PC A) codifica o
+arquivo em um sinal **OFDM** (várias subportadoras de áudio em paralelo, como um modem de linha
+telefônica ou o Wi-Fi), com correção de erros. O receptor (PC B) captura esse áudio pela entrada
+de linha, decodifica e remonta o arquivo, validando com CRC32.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       MainWindow                            │
-│  ┌────────────┐  ┌──────────────────────────────────────┐   │
-│  │ InputPanel │  │  Grid 2x2 de MonitorWidget (slots)   │   │
-│  │            │  │  ┌─────────┐ ┌─────────┐             │   │
-│  │ Webcam     │  │  │ Slot 1  │ │ Slot 2  │             │   │
-│  │ Microfone  │  │  ├─────────┤ ├─────────┤             │   │
-│  │ PTT        │  │  │ Slot 3  │ │ Slot 4  │             │   │
-│  └────────────┘  └─────────────────────────────────────-┘   │
-│  ┌────────────────────────────────────────────────────-─┐   │
-│  │ Alert bar (mic disabled, dismissable)                │   │
-│  └─────────────────────────────────────────────────────-┘   │
-│  Footer: checkboxes globais, configurações                  │
-└─────────────────────────────────────────────────────────────┘
-
-CameraPreview (tee → multiple appsinks → push para cada slot)
-MicCapture     (wasapi2src → level → valve → wasapi2sink dinâmico)
+PC A  (transmissor)          cabo P2 estéreo           PC B  (receptor)
+┌────────────────┐          ┌──────────────┐          ┌────────────────┐
+│ Python (CLI)   │  saída    │              │  entrada │ C++ / Qt6 (GUI)│
+│ gera o áudio   │ ───────►  │  )))   )))   │ ───────► │ captura e      │
+│ OFDM do arquivo│  de áudio │              │  de linha│ decodifica     │
+└────────────────┘          └──────────────┘          └────────────────┘
 ```
 
-**Componentes principais:**
-- `CameraPreview` — captura webcam via GStreamer, distribui via `tee` para o input panel + cada slot ativo. Suporta gravação concorrente em arquivo MP4.
-- `MonitorWidget` — um por slot. Renderiza CAM (ao vivo) ou VIDEO (gravação em loop). Tem efeitos próprios de glitch/lag.
-- `MicCapture` — pipeline de áudio único e dinâmico. Roteia microfone para uma saída específica (ou default Windows pra simulador). Suporta efeitos (packet loss + bit crush).
-- `HardwareDetector` — descobre webcams, monitores, microfones e saídas de áudio.
-- `AppSettings` — persistência em INI (Qt `QSettings`).
-- `GlitchEffects` — algoritmos de efeitos visuais (RGB shift, slices, etc).
+|  | PC A (transmissor) | PC B (receptor) |
+|---|---|---|
+| **Linguagem** | Python 3.10+ (só stdlib + numpy) | C++17 / Qt 6 |
+| **Interface** | linha de comando | interface gráfica |
+| **Papel** | gera o áudio (WAV) ou toca ao vivo | captura da entrada de linha e decodifica |
+| **Conexão** | saída de áudio (fone/line-out) | entrada de linha (line-in) |
 
 ---
 
-## Features
+## Velocidade
 
-### 🎥 Roteamento de vídeo
-- 1 webcam → até 4 saídas físicas simultâneas (monitores HDMI, USB capture, etc.)
-- Simulador em janela (mesmo PC) para teste sem hardware adicional
-- Detecção automática de monitores conectados
-- Hot-plug bidirecional: detecta conexão/desconexão em tempo real
-- Slot fantasma: monitor salvo no config mas não conectado aparece com `DESCONECTADO` (apenas botão de remover habilitado)
-- Persistência: monitor e slot são salvos e restaurados automaticamente
-- Auto-incremento de nome para simuladores ("Simulador 1", "Simulador 2"…)
-- **Câmera exclusiva**: apenas 1 slot pode estar em modo CAM por vez (configurável)
+A velocidade depende da **modulação** escolhida (quanto mais densa, mais rápida — e menos robusta):
 
-### 🎬 Modos por slot
-- **CAM**: transmite a webcam ao vivo
-- **VIDEO**: reproduz uma gravação em loop, com substituição perfeita por outra a qualquer momento
-- **GO LIVE**: abre janela física no monitor de destino e começa a transmitir
-- **IN LIVE**: indicador visual piscando (vermelho) quando transmitindo
+| Modulação | Velocidade | 10 MB em | Observação |
+|---|---|---|---|
+| QPSK | ~4 KB/s | ~42 min | mais robusta |
+| 16-QAM | ~8 KB/s | ~21 min | equilíbrio |
+| **64-QAM** | **~12 KB/s** | **~14 min** | **recomendada (teto robusto)** |
+| 256/1024-QAM | ~16-20 KB/s | — | experimentais (ver nota) |
+| **`--zip`** | **até 100×+** | **segundos** | quando os dados são compressíveis |
 
-### 🎞️ Gravação
-- Botão GRAVAR no painel de webcam
-- Salva como `omnicam_<camera>_<WxH>_<yyyyMMdd_HHmmss>.mp4` com metadados embedados (resolução nativa, FPS, codec)
-- Dialog informativo com dicas pré-gravação (dismissable)
-- Loop em VIDEO se mantém sincronizado entre repetições
+> **256-QAM e 1024-QAM (experimentais):** funcionam bem em **arquivos pequenos e médios**. No cabo,
+> o combo 256-QAM + FEC leve (`--fec r23`/`r34`) transferiu arquivos de até ~200 KB com sucesso, e é
+> cerca de 3× mais rápido que o 64-QAM para esses tamanhos. Em arquivos grandes (vários MB) as
+> modulações densas ficam marginais — uma transmissão longa acumula ruído suficiente para corromper
+> os dados. Para arquivos grandes, use o **64-QAM** (robusto). Para arquivos pequenos/médios onde a
+> velocidade importa, o combo 256-QAM + `--fec r34` é a opção mais rápida.
 
-### ⚡ Simulação de lag/glitch
-- **P. Glitch**: pausa o frame ("trava") temporariamente
-- **Sim. Lag**: combinação de FPS drop + slices RGB + lag burst
-- **Sim. Mic**: efeitos no microfone (packet loss + bit crush) — independente do Sim. Lag, mas acoplado por padrão
-- **Lag Periódico** (footer): trigger automático em intervalos aleatórios
-- **Trigger CAM→VIDEO** durante o lag (transição imperceptível entre live e gravação)
-- Configurável: %FPS, frequência de glitch, intensidade, candidates de bit depth
-
-### 🎙️ Microfone (Plano B — single sink dinâmico)
-- Regra de transmissão: áudio só é enviado quando **exatamente 1 monitor está em CAM+LIVE**
-- 0 monitores ativos → mute
-- 2+ monitores ativos → mute total (mecanismo de segurança) + alerta visual + ícone 🎤 nos slots afetados
-- Roteamento automático: monitor físico → seu device de áudio HDMI; simulador → default Windows
-- Voice Activity Detection (VAD): bezel verde quando voz é detectada (só com PTT ativo)
-- Detecção de mics em runtime: clique no combo reescaneia automaticamente
-- Persistência do mic selecionado
-
-### 🎤 PTT (Push-to-talk)
-- Atalho global no app: **F12**
-- Botão na UI sincronizado com o atalho
-- Sem delay (controle via valve, não via stop/start de pipeline)
-- Modo **"Ativo enquanto fala"**: clica uma vez no menu e mic continua ativo enquanto VAD detecta voz; timeout configurável (default 15s) sem voz → desliga automaticamente
-- Lock desativa em: timer expira, F12 novamente, click no botão, mudança de fonte (CAM→VIDEO), saída de LIVE, múltiplos canais ativos
-- Dialog de configuração acessível em 2 lugares (menu PTT + settings no footer)
-
-### 🚨 Sistema de alertas
-- Barra reutilizável acima do footer (Info/Warning/Error)
-- Botão "Não mostrar novamente" persistente
-- Overlay 🎤 nos monitores afetados quando mic é desativado por segurança
-
-### 💾 Persistência
-Tudo salvo em INI (`omnicam.config`):
-- Câmera selecionada
-- Microfone selecionado
-- Layout de monitores (slot, conector, nome)
-- Config de transition lag (FPS, % glitch, mic effects min/max)
-- Config PTT (timeout)
-- Alertas dismissed
-- Checkboxes do footer (Downscale, Desativar Sim. Lag, Lag Periódico, Câmera Exclusiva)
+O **64-QAM** é a opção recomendada: rápida e confiável no cabo. O `--zip` é a maior alavanca quando
+o arquivo comprime bem (texto, logs, código).
 
 ---
 
-## Build
+## Instalação
 
-### Requisitos
+### PC A — transmissor (Python)
 
-- **Windows 10/11** (x64)
-- **Qt 6.11** (`C:/Qt/6.11.0/msvc2022_64`)
-- **GStreamer 1.0** instalação completa (`C:/gstreamer/1.0/msvc_x86_64`)
-  - Download: https://gstreamer.freedesktop.org/download/
-  - Plugins necessários: `wasapi2`, `appsrc/appsink`, `videoconvert`, `level`, `valve`
-- **Visual Studio 2022** ou Build Tools
+Precisa de **Python 3.10+** e **numpy**. Nenhuma compilação.
+
+```bash
+pip install numpy sounddevice
+```
+
+(`sounddevice` só é necessário para tocar ao vivo com `--play`; para gerar um arquivo WAV, basta o numpy.)
+
+### PC B — receptor (C++ / Qt6, Windows)
+
+Precisa de:
+- **Qt 6.5+** (testado com Qt 6.11.1, MSVC 2022 64-bit)
+- **Visual Studio 2022 Build Tools** (MSVC, C++17)
 - **CMake 3.20+**
+- **vcpkg** com **PortAudio**
 
-### Compilação
-
+**1. Instalar o PortAudio via vcpkg:**
 ```bash
-git clone <repo>
-cd omnicam
-
-cmake -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release
+git clone https://github.com/microsoft/vcpkg.git
+cd vcpkg
+./bootstrap-vcpkg.bat
+./vcpkg install portaudio:x64-windows
 ```
 
-O executável fica em `build/Release/omnicam.exe`.
+**2. Compilar (CLion ou linha de comando):**
 
-### Variáveis de ambiente
+No CLion, configure as opções de CMake:
+```
+-DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/msvc2022_64
+-DCMAKE_TOOLCHAIN_FILE=<caminho>/vcpkg/scripts/buildsystems/vcpkg.cmake
+-DVCPKG_TARGET_TRIPLET=x64-windows
+```
 
-Se GStreamer não estiver no caminho padrão, defina:
+A flag `-DVCPKG_TARGET_TRIPLET=x64-windows` é obrigatória (sem ela o CMake não acha o PortAudio). O
+`portaudio.dll` é copiado automaticamente para a pasta do executável ao compilar.
 
+---
+
+## Como usar
+
+### Conexão física
+
+Ligue a **saída de áudio do PC A** (fone/line-out) à **entrada de linha do PC B** (line-in) com um
+cabo P2 estéreo macho-macho. A entrada de **microfone** funciona, mas é menos confiável (o controle
+automático de ganho distorce o sinal) — prefira a entrada de linha quando disponível.
+
+### Passo 1 — Preparar o receptor (PC B)
+
+1. Abra o **SoundBridge Receiver**.
+2. Clique em **Configurações** (⚙).
+3. Em **Codificação**, escolha o modo **OFDM**, a **banda** (22 kHz recomendado) e a **modulação**
+   (64-QAM recomendado). Cada campo tem um ícone de ajuda (ⓘ) explicando as opções.
+4. Em **Áudio**, selecione o dispositivo de **entrada** (a entrada de linha conectada ao cabo).
+5. Clique em **SALVAR**.
+6. Clique em **INICIAR**. O receptor fica aguardando o sinal.
+
+> As configurações do receptor precisam bater com as do transmissor (banda, modulação, estéreo).
+> Se a configuração do app não bater com a do Windows, um aviso oferece abrir o painel de som para
+> ajustar — depois é só clicar INICIAR de novo.
+
+### Passo 2 — Transmitir (PC A)
+
+O transmissor tem dois modos: **gerar um arquivo WAV** (para tocar depois) ou **tocar ao vivo** na
+placa de som (`--play`).
+
+**Tocar ao vivo (recomendado):**
 ```bash
-set GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\path\to\gstreamer\1.0\msvc_x86_64
+python -m sim.make_wav --in arquivo.zip --qam64 --stereo --band-high 22000 --play --device N
 ```
+(`--device N` é o índice da saída de áudio; veja como listar abaixo)
+
+**Gerar um WAV (para tocar manualmente depois):**
+```bash
+python -m sim.make_wav --in arquivo.zip --qam64 --stereo --band-high 22000 --out saida.wav
+```
+Depois reproduza `saida.wav` em qualquer player, com o cabo conectado à saída.
+
+**Listar os dispositivos de saída:**
+```bash
+python -m sim.make_wav --list-devices
+```
+
+> **Não sabe o índice do `--device`?** Use `--play` **sem** o `--device`. O transmissor lista os
+> dispositivos disponíveis e pergunta qual usar antes de enviar. Ex:
+> `python -m sim.make_wav --in arquivo.zip --qam64 --stereo --band-high 22000 --play`
+
+### Passo 3 — Acompanhar
+
+No receptor, a barra de progresso avança conforme o arquivo chega. Ao terminar, ele valida o CRC e
+salva o arquivo na pasta de saída configurada.
 
 ---
 
-## Uso rápido
+## Opções do transmissor
 
-1. **Adicionar saída**: clique direito num slot vazio → escolha um monitor real ou "Simulador"
-2. **Selecionar câmera**: botão `SELECIONAR` no painel de webcam
-3. **Ligar câmera**: botão `LIGAR`
-4. **Ativar slot**: clique `CAM` no slot
-5. **Ir ao ar**: clique `GO LIVE` → output window abre no monitor de destino
-6. **Falar**: aperta `F12` (ou click+hold no botão PTT) → áudio transmite
-
-Para gravar:
-
-1. `GRAVAR` no painel → dialog de dicas → confirma
-2. Faça os movimentos necessários
-3. `PARAR` quando terminar → arquivo MP4 salvo em `<temp>/omnicam_*.mp4`
-
----
-
-## Logs
-
-O app emite logs no stdout úteis pra depurar produção:
-
-```
-==============================================
-  OmniCam 1.0.0-LTS
-  Multi Presença
-  Build: Release | Max monitors: 4
-==============================================
-[MainWindow] camera restaurada: EMEET SmartCam S600
-[MainWindow] monitor restaurado: hdmi-1 no slot 0
-[CameraPreview] iniciada: 3840x2160 @30fps MJPEG (EMEET SmartCam S600)
-[Monitor 0] IN LIVE
-[MicCapture] iniciado, target='{0.0.0.00000000}.{952770e1-...}'
-[PTT] ativado
-[PTT] desativado
-[Monitor 0] off-air
-[MicCapture] parado
-[MainWindow] monitor desconectado: hdmi-1 no slot 0
-[MainWindow] monitor reconectado: hdmi-1 no slot 0
-[CameraPreview] gravando: C:\Temp\omnicam_EMEET_3840x2160_20260522_111530.mp4
-[CameraPreview] gravacao finalizada (180s)
-```
-
-Erros e warnings em `stderr` (BUS errors do GStreamer, falhas de pipeline, etc.).
-
----
-
-## Atalhos
-
-| Tecla | Ação |
+| Opção | O que faz |
 |---|---|
-| `F12` | Push-to-talk (mic) |
-| `Ctrl+F1..F8` | P. Glitch / Sim. Lag por slot (configurável) |
+| `--in ARQUIVO` | o arquivo a transmitir (ou uma pasta, veja abaixo) |
+| `--out ARQUIVO` | gera um WAV em vez de tocar ao vivo |
+| `--play` | toca ao vivo na placa de som |
+| `--device N` | índice da saída de áudio (com `--play`) |
+| `--stereo` | usa os dois canais (2× mais rápido; recomendado) |
+| `--band-high N` | frequência máxima da banda em Hz (recomendado: 22000) |
+| `--qam16` / `--qam64` | modulação 16-QAM / 64-QAM (padrão: QPSK) |
+| `--qam256` / `--qam1024` | modulações experimentais (ver nota abaixo) |
+| `--fec MODO` | correção de erro: `r12` (padrão, robusto, arquivos grandes), `r23`/`r34` (mais leve/rápido, arquivos pequenos-médios), ou `none` |
+| `--resync N` | re-sincronização a cada N blocos: `off`/`10`/`25`/`5` (padrão 10) |
+| `--parity N` | blocos de recuperação: `off`/`8`/`16`/`32` (padrão 16) |
+| `--zip` | comprime os dados antes de enviar (o receptor descomprime) |
+| `--name "NOME"` | nome do arquivo salvo no receptor (aceita subpasta: `docs/a.txt`) |
+| `--text "..."` | envia um texto direto, sem arquivo |
+| `--copymemory` | o receptor copia o conteúdo para a área de transferência |
+| `--profile NOME` | usa um perfil de recepção (define a pasta de destino no receptor) |
+| `--in /pasta` | envia todos os arquivos de uma pasta, um após o outro |
+| `--gap N` | intervalo em segundos entre arquivos (com `--in /pasta`) |
+| `--verbose` | mostra detalhes de cada etapa |
+
+### Exemplos
+
+```bash
+# Arquivo com nome e destino por perfil
+python -m sim.make_wav --in relatorio.pdf --qam64 --stereo --band-high 22000 \
+    --name "docs/relatorio.pdf" --profile trabalho --play --device N
+
+# Texto direto para a área de transferência do receptor
+python -m sim.make_wav --text "chave: abc123" --copymemory --qam64 --stereo \
+    --band-high 22000 --play --device N
+
+# Comprimir (ótimo para texto/código)
+python -m sim.make_wav --in log.txt --zip --qam64 --stereo --band-high 22000 --play --device N
+
+# Uma pasta inteira
+python -m sim.make_wav --in ./projeto --qam64 --stereo --band-high 22000 --play --device N
+```
+
+> **Dica (git-bash no Windows):** caminhos com barra inicial em `--name` são convertidos pelo shell.
+> Use `//x`, `MSYS_NO_PATHCONV=1`, ou um caminho relativo sem barra inicial.
 
 ---
 
-## Arquitetura interna (notas técnicas)
+## Perfis de recepção
 
-### Pipeline de áudio (Plano B)
+O receptor pode ter **perfis** que definem a pasta de destino. Configure em **Configurações →
+Perfis de Recepção** (adicionar/editar/remover). Cada perfil tem um nome e uma pasta base.
 
-```
-wasapi2src → audioconvert → audioresample → level → valve → audioconvert → wasapi2sink
-                                              │
-                                              ↓
-                                       VAD (poll bus)
-```
-
-- 1 sink WASAPI por vez (evita conflito de clock entre múltiplos sinks)
-- `valve` na cadeia para mute/unmute instantâneo (sem reinicializar pipeline)
-- Probe de buffer após o `level` aplica efeitos (packet loss + bit crush) condicionalmente
-- VAD via `level` element + poll do bus, com suporte a `GST_VALUE_LIST`, `GST_VALUE_ARRAY` e `G_VALUE_BOXED` (fallback pra `GValueArray`)
-
-### Resolução do default Windows
-
-`wasapi2sink` sem device explícito não usa confiavelmente o default. Solução: consultar via `IMMDeviceEnumerator::GetDefaultAudioEndpoint(eRender, eConsole)` e setar o GUID explicitamente.
-
-### Slot fantasma
-
-Quando um monitor salvo no INI não está conectado no startup, criamos um `MonitorWidget` "ghost" com:
-- `connector_type = "ghost"`
-- Botões desabilitados
-- Overlay "DESCONECTADO" centralizado (label filho do `bezel`, não do `screen` — `screen` tem `WA_NativeWindow` que sobrescreve QPainter)
-- Opacity 0.7 via `QGraphicsOpacityEffect`
-- Reposicionamento via `QTimer::singleShot(0, ...)` pra esperar layout calcular
-
-### Hot-plug
-
-Timer de 2s (`pollDisconnectedMonitors`) que detecta:
-- Monitor desconectado: força `off-air`, fecha output window, marca como ghost
-- Monitor reconectado: atualiza info, remove ghost state
-
-Skipa simuladores (não desconectam).
+Ao transmitir com `--profile trabalho`, o arquivo é salvo na pasta base desse perfil. Se o nome do
+arquivo tiver subpasta (`--name "docs/a.txt"`), a árvore é criada dentro da pasta base. Se o perfil
+não existir no receptor, ele usa a pasta padrão e avisa.
 
 ---
 
-## Limitações conhecidas
+## Modo WAV (para testes, sem cabo)
 
-- Áudio só transmite com **1 monitor** em CAM+LIVE. Quando 2+, mute total (intencional, é safety).
-- Atalho PTT funciona apenas com app focado (sem global hotkey por enquanto).
-- Gravação fixa em formato MP4 com codec da câmera (sem transcoding).
+O receptor pode decodificar um WAV direto do disco, sem precisar do cabo — útil para testar.
+
+1. **Configurações → Debug → marcar "Modo WAV"**.
+2. Selecione o `.wav` gerado pelo transmissor (o app mostra sample rate, canais, duração).
+3. **SALVAR** e **INICIAR** — o app decodifica o arquivo pelo mesmo pipeline.
+
+---
+
+## Preparar o PC transmissor (Windows)
+
+Para o áudio chegar íntegro ao cabo, desative qualquer processamento de som no PC A. **Sem isso, o
+sistema operacional pode alterar o sinal antes de sair pela placa.**
+
+**1. Desativar efeitos do driver de áudio:**
+`Win+R` → `mmsys.cpl` → aba **Reprodução** → o dispositivo de saída → **Propriedades** →
+**Aprimoramentos** → marcar **"Desativar todos os efeitos sonoros"**.
+
+**2. Desativar o som espacial:**
+Botão direito no ícone de som → **Som espacial** → **Desativado**.
+
+**3. Desativar softwares de áudio do fabricante:**
+Se houver algum painel de áudio de fabricante (equalizador, "surround", "bass boost", etc.),
+desative os efeitos. Qualquer processamento no caminho do áudio distorce a codificação.
+
+**4. Conferir o sample rate:**
+`mmsys.cpl` → **Reprodução** → dispositivo → **Propriedades** → **Avançado** → **Formato padrão**
+deve ser **48000 Hz** (o SoundBridge opera a 48 kHz).
+
+> **Robustez:** na prática, o SoundBridge decodifica mesmo com alguns desses efeitos ligados (o FEC
+> corrige). Mas desativá-los dá a melhor margem — recomendado para a primeira transmissão.
+
+---
+
+## Protocolo (resumo técnico)
+
+O sinal é OFDM a 48 kHz: um símbolo de sincronização, um símbolo de estimativa de canal (LTF), um
+**header** de 96 bits protegido por CRC-24, e os símbolos de dados. Os dados passam por um código
+convolucional (FEC r=1/2) com interleaver e paridade, e são organizados em blocos com CRC próprio.
+
+O **header** carrega o tamanho, o CRC32 do conteúdo, e os parâmetros de FEC e modulação. O
+**conteúdo** é `[tamanho dos metadados][metadados JSON][dados]` — os metadados carregam o nome, o
+perfil, e as flags (zip, clipboard, etc.), de forma extensível sem mudar o formato do sinal.
+
+No estéreo, os blocos são divididos entre os dois canais (dobrando a velocidade). O receptor
+remonta os blocos por número de sequência, recupera perdas pela paridade quando possível, e valida
+o CRC32 final antes de salvar.
+
+Detalhes completos do formato estão em `ROADMAP.md` e `SoundBridge-HANDOFF.md`.
+
+---
+
+## Estrutura do projeto
+
+```
+soundbridge/
+├── README.md
+├── ROADMAP.md                    # roteiro, achados de engenharia, formato de linha
+├── SoundBridge-HANDOFF.md        # contexto completo para retomar o projeto
+├── DECISOES-ESTRATEGICAS.md      # decisões e o porquê
+├── FREEZE-AMPLITUDE.md           # o modo amplitude v1 (congelado)
+├── tx/                           # transmissor (Python)
+│   └── soundbridge_tx/ofdm/      # OFDM + FEC (modem, fec, tx, tx_stereo, ...)
+├── sim/                          # oráculo / CLI Python
+│   ├── make_wav.py               # CLI do transmissor
+│   ├── decode_wav.py             # decodificador de referência (arquivo ou --capture)
+│   ├── rx.py, fec_rx.py          # decodificador OFDM em Python
+│   └── evm_signal.py, measure_evm.py   # medição de qualidade do canal
+├── src/                          # receptor (C++ / Qt6)
+│   ├── audio/                    # captura, WAV, enumeração de devices
+│   ├── decoder/                  # OfdmDecoder, FecDecoder, BlockAssembler
+│   ├── protocol/                 # sync, header
+│   ├── core/                     # config, settings, logger
+│   └── ui/                       # MainWindow, ConfigDialog, ...
+└── tools/                        # geradores (sequências OFDM, vetores FEC)
+```
+
+---
+
+## Solução de problemas
+
+**O CMake não acha o PortAudio**
+Falta a flag `-DVCPKG_TARGET_TRIPLET=x64-windows`, ou o `CMAKE_TOOLCHAIN_FILE` não aponta para o vcpkg.
+
+**`STATUS_DLL_NOT_FOUND` (0xC0000135) ao abrir o app**
+O `portaudio.dll` não foi encontrado. Ele é copiado ao compilar; se você moveu o `.exe`, copie o
+`portaudio.dll` junto (está em `vcpkg/installed/x64-windows/bin/` ou `debug/bin/`).
+
+**Aviso "Configuração incompatível com o Windows" ao clicar INICIAR**
+Esperado. O Windows exige que o app use o mesmo sample rate configurado no painel de som. Clique em
+"Abrir Config do Windows", ajuste o sample rate para 48000 Hz, e clique INICIAR de novo.
+
+**Canais L e R desbalanceados**
+Quase sempre é efeito de áudio no PC transmissor. Veja "Preparar o PC transmissor" e desative os
+aprimoramentos e o som espacial. Para isolar, teste com loopback no mesmo PC (saída → entrada): se
+balancear, o problema é o transmissor.
+
+**Ruído alto quando os dois PCs estão ligados na tomada**
+Loop de terra entre as tomadas (zumbido de 50/60 Hz). O SNR normalmente ainda basta para decodificar.
+Se atrapalhar, alimente um dos PCs pela bateria (notebook) ou use um isolador de áudio.
+
+**Modo WAV recusa o arquivo**
+Formatos suportados: PCM 16/24/32-bit ou Float 32-bit. Arquivos comprimidos (MP3/ADPCM em container
+WAV) não funcionam. Exporte como "WAV PCM".
+
+---
+
+## Como funciona por dentro (camada física)
+
+O SoundBridge combina várias técnicas de comunicação digital para transmitir dados por áudio de
+forma confiável. Em resumo, cada peça e seu papel:
+
+- **FFT / IFFT — o motor (tempo ↔ frequência).** A Transformada de Fourier converte entre o sinal de
+  áudio (amostras no tempo) e os dados organizados por frequência. A IFFT monta o som no transmissor;
+  a FFT o separa de volta no receptor. É o que torna o OFDM possível e rápido o suficiente para
+  rodar em tempo real.
+
+- **OFDM — a estrutura (subportadoras paralelas).** Em vez de uma portadora rápida, divide a banda
+  em ~200 subportadoras lentas em paralelo (como o Wi-Fi ou o ADSL). Cada uma carrega um pouco dos
+  dados. Se algumas frequências forem ruins, só aquelas se perdem — o resto chega. Robusto a canais
+  irregulares como o áudio.
+
+- **QAM — a modulação (bits → pontos).** Cada grupo de bits vira um ponto num plano (amplitude +
+  fase). QPSK = 2 bits/ponto, 16-QAM = 4, 64-QAM = 6, 256/1024-QAM = 8/10. Mais bits por ponto =
+  mais rápido, mas os pontos ficam mais próximos e o ruído confunde mais. O 64-QAM é o equilíbrio.
+
+- **Pilotos — correção de fase fina.** Subportadoras com valores conhecidos, espalhadas no sinal.
+  O receptor as usa como referência para corrigir, símbolo a símbolo, a distorção de fase que o
+  canal introduz.
+
+- **FEC — correção de erros e perdas (Viterbi + interleaver + paridade).** Envia redundância para o
+  receptor corrigir erros sozinho, sem retransmitir. O **código convolucional + Viterbi** corrige
+  erros espalhados; o **interleaver** transforma rajadas de erro em erros espalhados (que o Viterbi
+  corrige); a **paridade** (estilo RAID) recupera blocos inteiros perdidos. É o que faz o arquivo
+  chegar íntegro apesar do ruído do cabo.
+
+- **Resync — anti-drift.** Os dois PCs têm relógios levemente diferentes, e o desalinhamento
+  acumula ao longo da transmissão. O transmissor insere marcas de sincronização periódicas; o
+  receptor as usa para se re-alinhar e zerar o desvio acumulado. Sem isso, transmissões longas
+  quebrariam no meio.
+
+- **CRC — verificação final.** Uma "impressão digital" (CRC32) do arquivo, calculada no transmissor
+  e recalculada no receptor. Se batem, o arquivo está garantidamente íntegro (byte a byte); se não,
+  o receptor sabe que algo corrompeu e não entrega dados errados.
+
+A qualidade do canal de áudio foi medida com uma métrica chamada **EVM** (o quanto os pontos QAM
+chegam deslocados do ideal), que guiou as escolhas do projeto — como usar a entrada de linha e o
+64-QAM como padrão. Detalhes completos em `ROADMAP.md`.
 
 ---
 
 ## Licença
 
-Proprietário. Todos os direitos reservados.
+Projeto acadêmico / pessoal.
